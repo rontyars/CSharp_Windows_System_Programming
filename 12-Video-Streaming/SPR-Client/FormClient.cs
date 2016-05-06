@@ -22,9 +22,19 @@ namespace SPR_Client
         private void Form1_Load(object sender, EventArgs e)
         {
             string ip = "127.0.0.1";
-            int port = 6060;
-            socket.createClient(ip, port);
+            int port = 6061;
+			socket.ClientMessageReceived += socket_ClientMessageReceived;
+            socket.createClient(ip, port,true,6060);
+
         }
+
+		void socket_ClientMessageReceived(string obj)
+		{
+			var bw = new BackgroundWorker();
+			bw.RunWorkerCompleted += (o, args) => listBox1.Items.Add("BroadCast: " + obj);
+			bw.RunWorkerAsync();
+			//listBox1.Invoke(new Net.pointer_to_funcation(s => listBox1.Items.Add("BroadCast: " + obj)));			
+		}
 
         private void button1_Click(object sender, EventArgs e)
         {

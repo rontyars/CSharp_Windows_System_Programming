@@ -22,7 +22,7 @@ namespace SPR_Server
         private void Form1_Load(object sender, EventArgs e)
         {
             int port = 6060;
-            socket.creartServer(port);
+            socket.creartServer(port,true,6061);
         }
 
         private void button1_Click(object sender, EventArgs e)

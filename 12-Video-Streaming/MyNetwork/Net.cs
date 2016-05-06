@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Text;
 ////////////////////////////////
 using System.Net.Sockets;
@@ -15,11 +16,26 @@ namespace MyNetwork
     {
         TcpClient client;
         TcpListener server;
-
-        public bool creartServer(int port)
+	    
+	    private UdpClient broadCastClient;
+	    private bool _clientBroadCasting;
+	    private int _clientRemoterPort;		
+		public event Action<string> ClientMessageReceived;
+		public event Action<string> ServerMessageReceived;
+        public bool creartServer(int port,bool broadCast=false,int remotePort=0)
         {
             try
             {
+				_clientBroadCasting = false;
+	            if (broadCast)
+	            {
+		            _clientBroadCasting = true;		            
+					broadCastClient = new UdpClient(port, AddressFamily.InterNetwork);
+					broadCastClient.EnableBroadcast = true;					
+					var groupEp = new IPEndPoint(IPAddress.Broadcast, remotePort);
+					broadCastClient.Connect(groupEp);
+					return true;
+	            }
                 server = new TcpListener(port);
                 server.Start();
                 Thread t1 = new Thread(AcceptTcpClient);
@@ -31,15 +47,26 @@ namespace MyNetwork
                 return false;
             }
         }
-
+	    
         private void AcceptTcpClient()
         {
             client = server.AcceptTcpClient();
         }
-        public bool createClient(string ip,int port)
+
+
+        public bool createClient(string ip,int port,bool forBroadCasting=false,int serverPort=0)
         {
             try
             {
+	            _clientBroadCasting = false;
+	            if (forBroadCasting)
+	            {
+		            _clientRemoterPort = serverPort;
+		            _clientBroadCasting = true;
+		            broadCastClient = new UdpClient(new IPEndPoint(IPAddress.Any, port));
+		            broadCastClient.BeginReceive(recv,null);
+		            return true;
+	            }
                 client = new TcpClient(ip, port);
                 return true;
             }
@@ -48,15 +75,32 @@ namespace MyNetwork
                 return false;
             }
         }
-    
+
+		private void recv(IAsyncResult res)
+		{
+			var groupEp = new IPEndPoint(IPAddress.Broadcast, _clientRemoterPort);
+			byte[] received = broadCastClient.EndReceive(res, ref groupEp);
+			broadCastClient.BeginReceive(recv, null);
+			if (ClientMessageReceived == null) return;
+			ClientMessageReceived(UnicodeEncoding.Unicode.GetString(received));
+
+		}
+
         public bool sendMsg(string msg)
         {
             try
             {
-                byte[] binary = UnicodeEncoding.Unicode.GetBytes(msg);
-                NetworkStream ns = client.GetStream();
-                ns.Write(binary, 0, binary.Length);
-                return true;
+				byte[] binary = UnicodeEncoding.Unicode.GetBytes(msg);
+	            if (_clientBroadCasting)
+	            {
+		            broadCastClient.Send(binary, binary.Length);
+	            }
+	            else
+	            {		            
+		            NetworkStream ns = client.GetStream();
+		            ns.Write(binary, 0, binary.Length);
+	            }
+	            return true;
             }
             catch
             {
@@ -78,12 +122,24 @@ namespace MyNetwork
             string msg = "";
             try
             {
-                NetworkStream ns = client.GetStream();
-                //byte[] binary = ns.Read();
-                byte[] binary = new byte[100];
-                ns.Read(binary, 0, binary.Length);
-                msg = UnicodeEncoding.Unicode.GetString(binary);
-                main.Invoke(f, msg);
+				byte[] binary = new byte[100];
+	            if (_clientBroadCasting)
+	            {
+		            broadCastClient.ReceiveAsync().ContinueWith((r =>
+		            {
+			            binary = r.Result.Buffer;
+						msg = UnicodeEncoding.Unicode.GetString(binary);
+						main.Invoke(f, msg);
+		            }));
+	            }
+	            else
+	            {
+		            NetworkStream ns = client.GetStream();
+		            //byte[] binary = ns.Read();                
+		            ns.Read(binary, 0, binary.Length);
+					msg = UnicodeEncoding.Unicode.GetString(binary);
+					main.Invoke(f, msg);
+	            }	            
                 //return msg;
             }
             catch
@@ -96,12 +152,21 @@ namespace MyNetwork
             string msg = "";
             try
             {
-                NetworkStream ns = client.GetStream();
-                //byte[] binary = ns.Read();
-                byte[] binary = new byte[100];
-                ns.Read(binary, 0, binary.Length);
-                msg = UnicodeEncoding.Unicode.GetString(binary);
-                return msg;
+				byte[] binary = new byte[100];
+	            if (_clientBroadCasting)
+	            {
+					var groupEp = new IPEndPoint(IPAddress.Broadcast, _clientRemoterPort);
+		            binary = broadCastClient.Receive(ref groupEp);		            
+			        msg = UnicodeEncoding.Unicode.GetString(binary);			            		            
+	            }
+	            else
+	            {
+		            NetworkStream ns = client.GetStream();
+		            //byte[] binary = ns.Read();		            
+		            ns.Read(binary, 0, binary.Length);
+		            msg = UnicodeEncoding.Unicode.GetString(binary);		            
+	            }
+				return msg;
             }
             catch
             {
