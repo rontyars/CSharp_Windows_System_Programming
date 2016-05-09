@@ -63,10 +63,37 @@ namespace SPR_Server
             socket.receiveFile(file);
             MessageBox.Show("Done");
         }
+        IWebCam webCam = null;
+        private void timer1_Tick_1(object sender, EventArgs e)
+        {
+            Image img = webCam.iWebCam_Image;
+            if (img != null)
+            {
+                pictureBox1.Image = img;
+                socket.sendImg(img);
+            }
+            img = null;
+            
+        }
         //10.4.44.73 :6060
         private void button5_Click(object sender, EventArgs e)
         {
-            socket.receiveImg(this, received_img);
+            //socket.receiveImg(this, received_img);
+            if (webCam == null)
+            {
+                webCam = new IWebCam(this.Handle);
+                timer1.Start();
+            }
+            else
+            {
+                timer1.Stop();
+                if (webCam.iWebCam_Image != null)
+                {
+                    webCam.iTurn_off_WebCam();
+                    
+                }
+                webCam = null;
+            }
         }
 
         public void received_img(Image img)
@@ -75,5 +102,7 @@ namespace SPR_Server
             pictureBox1.Refresh();
             socket.receiveImg(this, received_img);
         }
+
+       
     }
 }

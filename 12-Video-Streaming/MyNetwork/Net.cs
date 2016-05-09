@@ -20,8 +20,8 @@ namespace MyNetwork
 	    private UdpClient broadCastClient;
 	    private bool _clientBroadCasting;
 	    private int _clientRemoterPort;		
-		public event Action<string> ClientMessageReceived;
-		public event Action<string> ServerMessageReceived;
+		public event Action<Message> ClientMessageReceived;
+		public event Action<Message> ServerMessageReceived;
         public bool creartServer(int port,bool broadCast=false,int remotePort=0)
         {
             try
@@ -30,7 +30,7 @@ namespace MyNetwork
 	            if (broadCast)
 	            {
 		            _clientBroadCasting = true;		            
-					broadCastClient = new UdpClient(port, AddressFamily.InterNetwork);
+					broadCastClient = new UdpClient();
 					broadCastClient.EnableBroadcast = true;					
 					var groupEp = new IPEndPoint(IPAddress.Broadcast, remotePort);
 					broadCastClient.Connect(groupEp);
@@ -64,7 +64,8 @@ namespace MyNetwork
 		            _clientRemoterPort = serverPort;
 		            _clientBroadCasting = true;
 		            broadCastClient = new UdpClient(new IPEndPoint(IPAddress.Any, port));
-		            broadCastClient.BeginReceive(recv,null);
+                    broadCastClient.DontFragment = true;
+                    broadCastClient.BeginReceive(recv,null);
 		            return true;
 	            }
                 client = new TcpClient(ip, port);
@@ -82,7 +83,7 @@ namespace MyNetwork
 			byte[] received = broadCastClient.EndReceive(res, ref groupEp);
 			broadCastClient.BeginReceive(recv, null);
 			if (ClientMessageReceived == null) return;
-			ClientMessageReceived(UnicodeEncoding.Unicode.GetString(received));
+			ClientMessageReceived(Message.ToMessage(received));
 
 		}
 
@@ -93,7 +94,11 @@ namespace MyNetwork
 				byte[] binary = UnicodeEncoding.Unicode.GetBytes(msg);
 	            if (_clientBroadCasting)
 	            {
-		            broadCastClient.Send(binary, binary.Length);
+                    var msgO = new Message();
+                    msgO.Data = binary;
+                    var bt = msgO.ToByte();
+
+                    broadCastClient.Send(bt, bt.Length);
 	            }
 	            else
 	            {		            
@@ -229,26 +234,54 @@ namespace MyNetwork
             {
                 //img 2D -> 1D array of byte[]
                 byte[] img_1D = IImage.StreamFromImage(img);
+                var msg = new VideoMessage();
+                msg.Data = img_1D;
                 //send size to server
-                NetworkStream ns = client.GetStream();
                 byte[] size_of_img = BitConverter.GetBytes(img_1D.Length);//int -> 4byte
-                ns.Write(size_of_img, 0, size_of_img.Length);
-                //FileStream -> NetworkStream
-
                 MemoryStream fs = new MemoryStream(img_1D);
                 byte[] buffer = new byte[1024];
                 int readbytes = 0;
-                while ((readbytes = fs.Read(buffer, 0, buffer.Length)) > 0)
+                if (_clientBroadCasting)
                 {
-                    ns.Write(buffer, 0, readbytes);
-                    ns.Read(buffer, 0, 1);
-                    if (buffer[0] != 1)
-                        break;
+                    msg.Data = size_of_img;
+                    var bt = msg.ToByte();
+                    //broadCastClient.Send(bt, bt.Length);
+                    var bytesSent = 0;
+                    while ((readbytes = fs.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        msg.Data = buffer;
+                        msg.TimeStamp = DateTime.UtcNow;
+                        bytesSent += readbytes;
+                        if (bytesSent >= img_1D.Length) msg.FinalOfBufferedPacket = true;
+                        bt = msg.ToByte();
+                        broadCastClient.Send(bt, bt.Length);
+                        var ip = new IPEndPoint(IPAddress.Broadcast, _clientRemoterPort);
+                        //buffer = broadCastClient.Receive(ref ip);
+                        //if (buffer[0] != 1)
+                        //    break;
+                    }
                 }
-                fs.Close();
+                else
+                {
+                    NetworkStream ns = client.GetStream();
+
+                    ns.Write(size_of_img, 0, size_of_img.Length);
+                    //FileStream -> NetworkStream
+
+
+                    while ((readbytes = fs.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        ns.Write(buffer, 0, readbytes);
+                        ns.Read(buffer, 0, 1);
+                        if (buffer[0] != 1)
+                            break;
+                    }
+                    fs.Close();
+                }
+                
                 return true;
             }
-            catch
+            catch(Exception ex)
             {
                 return false;
             }
@@ -261,6 +294,33 @@ namespace MyNetwork
             Thread t2 = new Thread(receiveImg2);
             t2.Start(new object[2] { main, f });//call the thread+params
         }
+                 
+        public static Image GetImageFromBytes(byte[] data)
+        {
+            byte[] size_buffer = new byte[4];
+
+            int img_size = data.Length;//BitConverter.ToInt32(size_buffer, 0);
+
+            byte[] img_1D = new byte[img_size];
+            MemoryStream fs = new MemoryStream(img_1D);
+
+            //byte[] buffer = new byte[1024];
+            //int readbytes = 0;
+            
+                //while (img_size > 0)
+                //{                
+                //Buffer.BlockCopy(buffer, 0, receivedData, 0, receivedData.Length);
+               // buffer = broadCastClient.Receive(ref ep);
+                    //readbytes = buffer.Length;
+                    //img_size -= readbytes;
+                    fs.Write(data, 0, data.Length);
+            //buffer[0] = 1;
+            //broadCastClient.Send(buffer, 1);//msg to server [cont]
+            //}
+            fs.Close();
+            Image img = IImage.ImageFromStream(img_1D);
+            return img;
+        }
 
         private void receiveImg2(object obj)
         {
@@ -270,9 +330,9 @@ namespace MyNetwork
             pointer_to_funcation2 f = (pointer_to_funcation2)objs[1];
             try
             {
-                NetworkStream ns = client.GetStream();
+                
                 byte[] size_buffer = new byte[4];
-                ns.Read(size_buffer, 0, size_buffer.Length);
+                
                 int img_size = BitConverter.ToInt32(size_buffer, 0);
 
                 byte[] img_1D = new byte[img_size];
@@ -280,14 +340,33 @@ namespace MyNetwork
                
                 byte[] buffer = new byte[1024];
                 int readbytes = 0;
-                while (img_size > 0)
+                if (_clientBroadCasting)
                 {
-                    readbytes = ns.Read(buffer, 0, buffer.Length);
-                    img_size -= readbytes;
-                    fs.Write(buffer, 0, readbytes);
-                    buffer[0] = 1;
-                    ns.Write(buffer, 0, 1);//msg to server [cont]
+                    while (img_size > 0)
+                    {
+                        var ep = new IPEndPoint(IPAddress.Broadcast, _clientRemoterPort);
+                        buffer = broadCastClient.Receive(ref ep);
+                        readbytes = buffer.Length;
+                        img_size -= readbytes;
+                        fs.Write(buffer, 0, readbytes);
+                        //buffer[0] = 1;
+                        //broadCastClient.Send(buffer, 1);//msg to server [cont]
+                    }
                 }
+                else
+                {
+                    NetworkStream ns = client.GetStream();
+                    ns.Read(size_buffer, 0, size_buffer.Length);
+                    while (img_size > 0)
+                    {
+                        readbytes = ns.Read(buffer, 0, buffer.Length);
+                        img_size -= readbytes;
+                        fs.Write(buffer, 0, readbytes);
+                        buffer[0] = 1;
+                        ns.Write(buffer, 0, 1);//msg to server [cont]
+                    }
+                }
+                   
                 fs.Close();
                 Image img = IImage.ImageFromStream(img_1D);
                 main.Invoke(f, img);
